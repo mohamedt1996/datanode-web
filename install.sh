@@ -8,7 +8,7 @@ case "$ID" in ubuntu|debian) ;; *) echo 'Supported systems: Debian and Ubuntu (6
 case "$(uname -m)" in x86_64|aarch64) ;; *) echo 'A 64-bit OS is required.'; exit 1;; esac
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl git openssl
+apt-get install -y ca-certificates curl git
 if ! command -v docker >/dev/null; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
@@ -32,8 +32,10 @@ fi
 [[ -f compose.yaml && -f app.py ]] || { echo 'Run the installer from the extracted project folder.'; exit 1; }
 umask 077
 if [[ ! -f .env ]]; then
-  printf 'APP_PASSWORD=%s\nPORT=3923\nBIND_IP=0.0.0.0\nDATANODES_API_KEY=\n' "$(openssl rand -hex 20)" > .env
+  printf 'PORT=3923\nBIND_IP=0.0.0.0\nDATANODES_API_KEY=\n' > .env
 fi
+# Older installs had a password; it is no longer used.
+sed -i '/^APP_PASSWORD=/d' .env
 chmod 600 .env
 docker compose up -d --build
 healthy=0
@@ -43,6 +45,6 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 if [[ $healthy != 1 ]]; then echo 'The app did not become healthy. Run: docker compose logs --tail=80'; exit 1; fi
-printf '\nDataNode Web is ready on port %s. Username: admin\n' "$(sed -n 's/^PORT=//p' .env)"
-printf 'Password: %s\n' "$(sed -n 's/^APP_PASSWORD=//p' .env)"
-printf 'Open http://YOUR-SERVER-IP:3923 on your LAN. For internet access, use an HTTPS reverse proxy.\nSettings: %s/.env\n' "$PWD"
+PORT=$(sed -n 's/^PORT=//p' .env); IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+printf '\nDataNode Web is ready. Open http://%s:%s on any device on your network (no login).\n' "${IP:-YOUR-SERVER-IP}" "${PORT:-3923}"
+printf 'There is no password, so do not forward this port to the internet. Settings: %s/.env\n' "$PWD"

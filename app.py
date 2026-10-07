@@ -1,8 +1,6 @@
-"""Single-user DataNode resolver and bounded-memory download relay."""
+"""DataNode resolver: many links at once, direct links by default, optional relay. No login."""
 import asyncio
-import base64
 import contextlib
-import hmac
 import ipaddress
 import os
 import re
@@ -18,13 +16,13 @@ from aiohttp.resolver import DefaultResolver
 from vendor import moon_extract as moon
 
 ROOT = Path(__file__).parent
-TOKEN = os.environ.get('APP_PASSWORD', '')
-TTL = 1800
+TTL = 3600
+MAX_BATCH = 50
+MAX_QUEUED = 100
 JOBS = {}
 LOCK = asyncio.Lock()
 GATE = None
 ACTIVE = None
-FAILURES = {}
 
 
 def validate_source(url):
@@ -63,26 +61,9 @@ class PublicResolver(DefaultResolver):
 
 @web.middleware
 async def protection(request, handler):
+    """No login. POSTs must come from this page, so other websites can't drive it."""
     if request.path == '/healthz':
         return web.json_response({'ok': True})
-    now = time.monotonic()
-    key = request.remote or 'unknown'
-    failed = FAILURES.get(key, [])
-    failed = [t for t in failed if now - t < 60]
-    if len(failed) >= 12:
-        raise web.HTTPTooManyRequests(text='Wait one minute before trying again.')
-    try:
-        scheme, encoded = request.headers.get('Authorization', '').split(' ', 1)
-        user, password = base64.b64decode(encoded, validate=True).decode().split(':', 1)
-        valid = scheme.lower() == 'basic' and hmac.compare_digest(user.encode(), b'admin') and hmac.compare_digest(password.encode(), TOKEN.encode())
-    except (ValueError, UnicodeError):
-        valid = False
-    if not valid:
-        if len(FAILURES) > 4096:
-            FAILURES.clear()
-        FAILURES[key] = failed + [now]
-        raise web.HTTPUnauthorized(headers={'WWW-Authenticate': 'Basic realm="DataNode Web", charset="UTF-8"'})
-    FAILURES.pop(key, None)
     if request.method == 'POST':
         origin = request.headers.get('Origin')
         if origin and urlsplit(origin).netloc != request.host:
@@ -90,11 +71,15 @@ async def protection(request, handler):
         if request.headers.get('X-Requested-With') != 'DataNodeWeb':
             raise web.HTTPForbidden(text='Missing request header.')
     response = await handler(request)
-    response.headers['Cache-Control'] = 'no-store'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    if not response.prepared:
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        # frame-src https: lets the page start direct downloads in hidden frames.
+        response.headers['Content-Security-Policy'] = ("default-src 'self'; img-src 'self' blob:; style-src 'self'; "
+                                                       "script-src 'self'; frame-src 'self' https:; "
+                                                       "frame-ancestors 'self'; base-uri 'none'")
     return response
 
 
@@ -116,20 +101,48 @@ def prune():
             JOBS.pop(key, None)
 
 
+def name_of(url):
+    parts = [p for p in urlsplit(url).path.split('/') if p]
+    name = unquote(parts[1]) if len(parts) > 1 else parts[0] if parts else 'download'
+    return name.replace('\r', '').replace('\n', '')[:200] or 'download'
+
+
+def queued_count():
+    return sum(j['state'] in ('queued', 'resolving', 'verification') for j in JOBS.values())
+
+
 async def create(request):
+    """Accepts {"urls": [...]} (one per link) or the older {"url": "..."}."""
     prune()
-    if sum(j['state'] in ('queued', 'resolving', 'verification') for j in JOBS.values()) >= 5 or len(JOBS) >= 50:
-        raise web.HTTPTooManyRequests(text='Queue full. Wait for a download to finish.')
     try:
         data = await request.json()
-        url = validate_source(data.get('url'))
+        raw = data.get('urls') if isinstance(data.get('urls'), list) else [data.get('url')]
     except (ValueError, TypeError, AttributeError):
-        raise web.HTTPBadRequest(text='Enter an HTTPS datanodes.to file link.')
-    jid = secrets.token_urlsafe(24)
-    job = {'id': jid, 'source': url, 'state': 'queued', 'created': time.time(), 'message': 'Waiting for the browser.'}
-    JOBS[jid] = job
-    job['task'] = asyncio.create_task(resolve(job))
-    return web.json_response({'id': jid}, status=202)
+        raise web.HTTPBadRequest(text='Send a list of datanodes.to links.')
+    raw = [u for u in raw if isinstance(u, str) and u.strip()][:MAX_BATCH]
+    accepted, rejected, seen = [], [], set()
+    for u in raw:
+        try:
+            url = validate_source(u)
+        except ValueError as exc:
+            rejected.append({'url': u[:200], 'error': str(exc)})
+            continue
+        if url not in seen:
+            seen.add(url)
+            accepted.append(url)
+    if not accepted:
+        raise web.HTTPBadRequest(text='No usable links. Use HTTPS datanodes.to file links, one per line.')
+    if queued_count() + len(accepted) > MAX_QUEUED:
+        raise web.HTTPTooManyRequests(text=f'Queue full ({MAX_QUEUED} waiting). Wait for some links to finish.')
+    ids = []
+    for url in accepted:
+        jid = secrets.token_urlsafe(18)
+        job = {'id': jid, 'source': url, 'name': name_of(url), 'state': 'queued',
+               'created': time.time(), 'message': 'Waiting for its turn.'}
+        JOBS[jid] = job
+        job['task'] = asyncio.create_task(resolve(job))
+        ids.append(jid)
+    return web.json_response({'ids': ids, 'rejected': rejected}, status=202)
 
 
 async def browser_guard(route):
@@ -205,9 +218,26 @@ def get_job(request):
     return job
 
 
+def public_job(job):
+    out = {k: job[k] for k in ('id', 'state', 'message', 'name')}
+    if job['state'] == 'ready':
+        out['direct'] = job['direct']
+    return out
+
+
 async def status(request):
-    job = get_job(request)
-    return web.json_response({k: job[k] for k in ('id', 'state', 'message')})
+    return web.json_response(public_job(get_job(request)))
+
+
+async def statuses(request):
+    """GET /api/jobs?ids=a,b,c -> every listed job, missing ones reported as expired."""
+    prune()
+    out = []
+    for jid in request.query.get('ids', '').split(',')[:200]:
+        job = JOBS.get(jid)
+        out.append(public_job(job) if job else {'id': jid, 'state': 'expired',
+                                                 'message': 'Expired. Submit the link again.', 'name': ''})
+    return web.json_response({'jobs': out, 'active': ACTIVE})
 
 
 async def active_page(request):
@@ -252,7 +282,9 @@ async def relay(request):
     job = get_job(request)
     if job['state'] != 'ready':
         raise web.HTTPConflict(text='Link is not ready.')
-    headers = {'User-Agent': job['agent'], 'Referer': 'https://datanodes.to/'}
+    # identity: ask for the file's own bytes. Passing a compressed body through
+    # with its Content-Encoding header is what turned downloads into gibberish.
+    headers = {'User-Agent': job['agent'], 'Referer': 'https://datanodes.to/', 'Accept-Encoding': 'identity'}
     if 'Range' in request.headers:
         if not re.fullmatch(r'bytes=\d*-\d*', request.headers['Range']):
             raise web.HTTPBadRequest(text='Use one byte range.')
@@ -288,13 +320,20 @@ async def relay(request):
             return web.Response(status=416, headers={'Content-Range': upstream.headers.get('Content-Range', 'bytes */0')})
         if upstream.status not in (200, 206) or 'text/html' in upstream.headers.get('Content-Type', '').lower():
             raise web.HTTPBadGateway(text='The file link expired or the host refused it. Return to the app and resolve it again.')
-        filename = unquote(urlsplit(target).path.rsplit('/', 1)[-1]) or 'download'
+        if upstream.headers.get('Content-Encoding', 'identity').lower() not in ('identity', ''):
+            raise web.HTTPBadGateway(text='The host sent a compressed reply instead of the file. Try the direct link.')
+        first = await upstream.content.read(512)
+        if first.lstrip()[:15].lower().startswith((b'<!doctype html', b'<html', b'<head', b'<script')):
+            raise web.HTTPBadGateway(text='The host sent a web page instead of the file. The link expired; resolve it again.')
+        filename = job.get('name') or unquote(urlsplit(target).path.rsplit('/', 1)[-1]) or 'download'
         filename = filename.replace('\r', '').replace('\n', '')[:200]
-        out = {k: upstream.headers[k] for k in ('Content-Length', 'Content-Range', 'Accept-Ranges', 'Content-Encoding') if k in upstream.headers}
+        out = {k: upstream.headers[k] for k in ('Content-Length', 'Content-Range', 'Accept-Ranges') if k in upstream.headers}
         out.update({'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + quote(filename, safe=''), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no'})
         response = web.StreamResponse(status=upstream.status, headers=out)
         await response.prepare(request)
         started = True
+        if first:
+            await response.write(first)
         async for chunk in upstream.content.iter_chunked(256 * 1024):
             await response.write(chunk)
         await response.write_eof()
@@ -329,12 +368,10 @@ def make_app():
     app = web.Application(middlewares=[protection], client_max_size=4096)
     app.cleanup_ctx.append(lifetime)
     app.add_routes([web.get('/', index), web.get('/healthz', index), web.get('/static/{name}', asset),
-        web.post('/api/jobs', create), web.get('/api/jobs/{jid}', status),
+        web.post('/api/jobs', create), web.get('/api/jobs', statuses), web.get('/api/jobs/{jid}', status),
         web.get('/api/jobs/{jid}/screen', screenshot), web.post('/api/jobs/{jid}/click', click),
         web.get('/download/{jid}', relay), web.get('/direct/{jid}', direct)])
     return app
 
 if __name__ == '__main__':
-    if len(TOKEN) < 20:
-        raise SystemExit('Set APP_PASSWORD to at least 20 characters. Use install.sh to generate it.')
     web.run_app(make_app(), host='0.0.0.0', port=8080, access_log=None)

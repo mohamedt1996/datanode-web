@@ -1,6 +1,6 @@
 # DataNode Web
 
-Paste a DataNode share link in a mobile-friendly web page. A server browser prepares the download, then your device downloads the file. Includes MoonDownloader's automatic verification attempt and a touchable browser screenshot for manual fallback.
+Paste one or many DataNode share links in a mobile-friendly web page. A server browser prepares each one in turn; you get every direct link, and your device downloads them 5–10 seconds apart. Includes MoonDownloader's automatic verification attempt and a touchable browser screenshot for manual fallback.
 
 ## Install on Ubuntu / Debian
 
@@ -12,7 +12,7 @@ From the extracted project folder:
 sudo bash install.sh
 ```
 
-Open `http://YOUR-SERVER-IP:3923`. Sign in as `admin` with the generated password printed by the installer. It is also stored in `.env`, readable only by the installing user/root. Use HTTPS via a reverse proxy before exposing this password-protected app on the internet. The app is intended for one owner, not unrelated public users; browser state and jobs are shared.
+Open `http://YOUR-SERVER-IP:3923`. There is no login: anyone who can reach the port can use it, so keep it on your home network and do not forward the port to the internet. Use a VPN such as Tailscale to reach it from outside.
 
 Install directly from the public GitHub repository:
 
@@ -24,14 +24,14 @@ The command downloads the installer, installs its prerequisites, clones the publ
 
 ## Use
 
-1. Paste `https://datanodes.to/FILECODE/optional-filename` and press **Prepare download**.
-2. Keep the page open. Verification is attempted automatically.
-3. If it needs help, expand **Browser help** and tap the checkbox in the server browser image.
-4. The download starts automatically when ready; a visible button remains if the device blocks it.
+1. Paste one or more `https://datanodes.to/FILECODE/optional-filename` links, one per line, and press **Prepare downloads**.
+2. Keep the page open. The server prepares the links one at a time and attempts verification automatically.
+3. If one needs help, expand **Browser help** and tap the checkbox in the server browser image.
+4. Each finished link shows its **direct link** (and **Copy all direct links** copies them all). With *Download automatically* on, the device starts each file 5–10 seconds after the previous one.
 
-The default relay streams from DataNode through your server to the device, with bounded memory and no file stored on server disk. It supports a single HTTP byte range for resume while the job and upstream link are valid. It uses server bandwidth. **Direct from DataNode** redirects the device instead: this may fail if DataNode binds links to the server IP, verification cookies, or headers. A direct redirect cannot transfer the server's browser cookies to your device.
+**Direct links are the default**: the device downloads straight from DataNode, using none of the server's bandwidth. They may fail if DataNode ties a link to the server's IP or verification cookies; you'd see an error instead of a file. Then tick **Stream through my server**: the server fetches the file with its own cookies and passes it to the device without saving it, with resume support.
 
-Jobs are in memory and expire after 30 minutes; upstream links can expire sooner. Restarting loses jobs but retains the browser profile. One extraction runs at a time, up to five can queue. Only submit links you are permitted to download.
+Jobs are in memory and expire after an hour; upstream links can expire sooner. Restarting loses jobs but keeps the browser profile. One extraction runs at a time; up to 100 links can wait. Only submit links you are permitted to download.
 
 ## Settings / management
 
@@ -39,7 +39,6 @@ Edit `.env`, then run `sudo docker compose up -d`:
 
 - `PORT=3923`: host port.
 - `BIND_IP=0.0.0.0`: use `127.0.0.1` when a reverse proxy on the same host handles access.
-- `APP_PASSWORD`: at least 20 characters. Never commit `.env`.
 - `DATANODES_API_KEY`: optional DataNode key. Uses the upstream API when your account permits direct links; otherwise falls back to the browser. No key is bundled.
 
 ```bash
@@ -62,7 +61,7 @@ files.example.com {
 
 Automatic Turnstile success is **not guaranteed**. The container uses Debian Chromium for both x86_64 and ARM64; it may be rejected where desktop Chrome succeeds. DataNode layout changes can break extraction. A live DataNode download and Docker build must be validated on the target server; this delivery does not claim they were tested here.
 
-The app rejects arbitrary source domains, authenticates UI/API/downloads, checks POST origins, limits jobs, blocks private destinations in relay DNS resolution, filters redirected cookies by destination, and exposes no Chrome debugging/VNC port. Browser requests receive a private-network check, but browser DNS resolution is separate from that check: use a firewall-isolated container/network if protection against malicious DNS rebinding is required. Do not grant the browser access to trusted internal services. Browser upstream automation uses Chromium without its sandbox inside a non-root, capability-dropped container. Keep it dedicated to downloads.
+The app has no login. It rejects arbitrary source domains, checks POST origins, limits jobs, blocks private destinations in relay DNS resolution, filters redirected cookies by destination, and exposes no Chrome debugging/VNC port. Browser requests receive a private-network check, but browser DNS resolution is separate from that check: use a firewall-isolated container/network if protection against malicious DNS rebinding is required. Do not grant the browser access to trusted internal services. Browser upstream automation uses Chromium without its sandbox inside a non-root, capability-dropped container. Keep it dedicated to downloads.
 
 Run local checks:
 

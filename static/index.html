@@ -1,1 +1,52 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DataNode · Drop & download</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head><body><main><header><span class="mark">↓</span><b>DATANODE WEB</b><span class="tag">YOUR SERVER · YOUR DEVICE</span></header><section class="intro"><span class="eyebrow">A shorter way to your files</span><h1>Drop a link.<br><span>Take your file.</span></h1><p>Prepare a DataNode link here, then download straight to the device you’re using.</p></section><form id="form"><label for="url">DataNode share link</label><div class="inputrow"><input id="url" type="url" placeholder="https://datanodes.to/…" required autocomplete="off"><button id="submit">Prepare download <span>↗</span></button></div><div class="options"><label><input id="auto" type="checkbox" checked> Start download when ready</label><label><input id="direct" type="checkbox"> Direct from DataNode</label></div><p class="hint">Default: stream through your server, with no file saved there. Direct mode skips server bandwidth, but may fail if the host ties the link to your server’s IP.</p></form><section id="result" hidden aria-live="polite"><div class="statusline"><span id="dot" class="dot"></span><b id="state">Preparing</b></div><p id="message"></p><div id="ready" hidden><a id="download" class="primary">Download to this device ↓</a><a id="directlink" class="secondary">Try direct link ↗</a><p class="hint">If your browser blocks automatic downloads, tap the download button. On iPhone, check Safari’s Downloads.</p></div><details id="help"><summary>Browser help <span>For verification that needs your touch</span></summary><p>Wait for the browser image, then tap the verification checkbox in it. The image refreshes every 3 seconds.</p><button type="button" id="refresh">Refresh browser</button><p id="screenstatus"></p><img id="screen" alt="Server browser view. Tap the verification checkbox if shown." hidden></details></section><footer><span>01 · Paste</span><span>02 · Verify</span><span>03 · Download</span></footer></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DataNode · Drop & download</title>
+<link rel="stylesheet" href="/static/style.css">
+<script defer src="/static/app.js"></script>
+</head>
+<body>
+<main>
+  <header><span class="mark">↓</span><b>DATANODE WEB</b><span class="tag">YOUR SERVER · YOUR DEVICE</span></header>
+
+  <section class="intro">
+    <span class="eyebrow">A shorter way to your files</span>
+    <h1>Drop your links.<br><span>Take your files.</span></h1>
+    <p>Paste one or more DataNode links. The server prepares each one in turn; you get its direct link, and this device downloads them one after another.</p>
+  </section>
+
+  <form id="form">
+    <label for="urls">DataNode share links, one per line</label>
+    <textarea id="urls" rows="6" placeholder="https://datanodes.to/…&#10;https://datanodes.to/…" required autocomplete="off" spellcheck="false"></textarea>
+    <div class="inputrow"><button id="submit">Prepare downloads <span>↗</span></button></div>
+    <div class="options">
+      <label><input id="auto" type="checkbox" checked> Download automatically, 5–10 s apart</label>
+      <label><input id="relay" type="checkbox"> Stream through my server instead</label>
+    </div>
+    <p class="hint">Default: your device downloads straight from DataNode using the direct link. If those fail with an error page, tick “Stream through my server”: it uses the server’s connection and cookies.</p>
+  </form>
+
+  <section id="result" hidden aria-live="polite">
+    <div class="statusline"><span class="dot"></span><b id="summary">Preparing</b>
+      <span class="spacer"></span>
+      <button type="button" id="copyall" class="ghost" disabled>Copy all direct links</button>
+      <button type="button" id="clear" class="ghost">Clear list</button>
+    </div>
+    <p id="message"></p>
+    <ul id="jobs"></ul>
+
+    <details id="help">
+      <summary>Browser help <span>For verification that needs your touch</span></summary>
+      <p>When a link is stuck on verification, tap the checkbox in this image. It refreshes every 3 seconds.</p>
+      <button type="button" id="refresh">Refresh browser</button>
+      <p id="screenstatus"></p>
+      <img id="screen" alt="Server browser view. Tap the verification checkbox if shown." hidden>
+    </details>
+  </section>
+
+  <footer><span>Paste</span><span>Verify</span><span>Download</span></footer>
+</main>
+</body>
+</html>
