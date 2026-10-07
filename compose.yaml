@@ -1,0 +1,20 @@
+services:
+  datanode-web:
+    build: .
+    restart: unless-stopped
+    init: false
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PORT:-3923}:8080"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Run install.sh first}
+      MOON_DN_API_KEY: ${DATANODES_API_KEY:-}
+    volumes:
+      - browser-data:/data
+    shm_size: 512mb
+    mem_limit: 1800m
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  browser-data:
